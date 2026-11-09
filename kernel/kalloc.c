@@ -10,7 +10,7 @@
 #include "defs.h"
 
 void freerange(void *pa_start, void *pa_end);
-
+int sprintint(char *, int, int, int);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
@@ -21,12 +21,22 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+  char name[16];
+} kmem[NCPU];
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  for(int i = 0; i < NCPU; i++){
+    int n = snprintf(kmem[i].name,
+                     sizeof(kmem[i].name),
+                     "kmem%d", i);
+
+    kmem[i].name[n] = '\0';
+
+    initlock(&kmem[i].lock, kmem[i].name);
+  }
+
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -55,11 +65,17 @@ kfree(void *pa)
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
-
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  int id = cpuid();
+  acquire(&kmem[id].lock);
+  r->next = kmem[id].freelist;
+  kmem[id].freelist = r;
+  release(&kmem[id].lock);
+  pop_off();
+  // acquire(&kmem.lock);
+  // r->next = kmem.freelist;
+  // kmem.freelist = r;
+  // release(&kmem.lock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -69,13 +85,36 @@ void *
 kalloc(void)
 {
   struct run *r;
+  push_off();
+  int id = cpuid();
+  acquire(&kmem[id].lock);
+  r = kmem[id].freelist;
+  if(r){
+    kmem[id].freelist = r->next;
+  }
+  release(&kmem[id].lock);
+  if(r == 0){
+    for(int j=1;j<NCPU;j++){
+      int i = (j+id)%NCPU;
+      if(i==id) continue;
+      acquire(&kmem[i].lock);
+      r = kmem[i].freelist;
+      if(r)
+        {
+          kmem[i].freelist = r->next;
+          release(&kmem[i].lock); 
+          break;
+        }
+      release(&kmem[i].lock);      
+    }
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  }
 
+  // acquire(&kmem.lock);
+  // r = kmem.freelist;
+
+  // release(&kmem.lock);
+  pop_off();
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
