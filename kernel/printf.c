@@ -176,3 +176,22 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+ void
+ backtrace(void){
+  uint64 f_p = r_fp();
+  uint64 top = PGROUNDUP(f_p);
+  uint64 down = PGROUNDDOWN(f_p);
+  printf("backtrace:\n");
+  while(f_p < top && f_p > down){
+        uint64 ra = *(uint64*)(f_p - 8);   // 返回地址
+        uint64 prev_fp = *(uint64*)(f_p);  // 调用者的 s0
+        
+        printf("%lx\n", ra);   // 打印返回地址
+        
+        f_p = prev_fp;   // 向上移动
+    }
+
+  
+
+ }
