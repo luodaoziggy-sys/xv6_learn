@@ -9,8 +9,11 @@
 #include "riscv.h"
 #include "defs.h"
 
-void freerange(void *pa_start, void *pa_end);
+void *superblock[KALLOC_2M]; // 2M pages list
 
+
+void freerange(void *pa_start, void *pa_end);
+void freerange_2M(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
@@ -27,7 +30,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  freerange_2M(end, (void*)PHYSTOP);
 }
 
 void
@@ -79,4 +82,60 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+void
+freerange_2M(void *pa_start, void *pa_end)
+{
+  char *p;
+  p = (char*)PGROUNDUP((uint64)pa_start);
+  int si = 0;
+  while (p+PGSIZE<=(char*)pa_end)
+  {
+   if(si<KALLOC_2M&&((uint64)p%KALLOC_2M_SIZE)==0&&((uint64)p+KALLOC_2M_SIZE)<=(uint64)pa_end)
+   {
+    superblock[si] = p;
+    si++;
+    p+=KALLOC_2M_SIZE;
+   }
+   else{
+    kfree(p);
+    p+=PGSIZE;
+   }
+  }
+
+}
+
+
+void *
+kalloc_2M(void)
+{
+  void *p=0;
+    acquire(&kmem.lock);
+    for(int i = 0; i < KALLOC_2M; i++){
+        if(superblock[i]){
+            p = superblock[i];
+            superblock[i] = 0;
+            break;
+        }
+    }
+    release(&kmem.lock);
+
+    if(p)
+        memset(p, 5, KALLOC_2M_SIZE);   // 填充垃圾（调试）
+    return p;
+
+}
+
+void
+superfree(void *p)
+{
+    acquire(&kmem.lock);
+    for(int i = 0; i < KALLOC_2M; i++){
+        if(superblock[i] == 0){
+            superblock[i] = p;
+            break;
+        }
+    }
+    release(&kmem.lock);
 }

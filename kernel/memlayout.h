@@ -64,7 +64,8 @@
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)
 #ifdef LAB_PGTBL
 #define USYSCALL (TRAPFRAME - PGSIZE)
-
+#define KALLOC_2M 16
+#define KALLOC_2M_SIZE (2 * 1024 * 1024) // 2MB aligned size
 struct usyscall {
   int pid;  // Process ID
 };
