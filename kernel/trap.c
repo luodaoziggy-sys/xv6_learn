@@ -5,10 +5,18 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+// #include "riscv.h"
+#include "refcount.h"
 
 struct spinlock tickslock;
 uint ticks;
 
+// #define NPAGE (PHYSTOP/PGSIZE)
+
+// struct{
+//   struct spinlock lock;
+//   int count[NPAGE];
+// }lock_counting;
 extern char trampoline[], uservec[], userret[];
 
 // in kernelvec.S, calls kerneltrap().
@@ -68,9 +76,15 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
-    setkilled(p);
+    if(r_scause() == 15){
+      if(cowresolve(p->pagetable, r_stval()) < 0)
+        setkilled(p);
+    } else {
+            printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
+          printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
+          setkilled(p);
+    }
+
   }
 
   if(killed(p))

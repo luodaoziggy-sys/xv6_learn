@@ -8,6 +8,9 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+#include "refcount.h"
+
+struct page_refcounts lock_counting;
 
 void freerange(void *pa_start, void *pa_end);
 
@@ -23,10 +26,18 @@ struct {
   struct run *freelist;
 } kmem;
 
+// #define NPAGE (PHYSTOP/PGSIZE)
+
+// struct{
+//   struct spinlock lock;
+//   int count[NPAGE];
+// }lock_counting;
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&lock_counting.lock,"lock_counting");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -35,8 +46,11 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE){
+    lock_counting.count[(uint64)p/PGSIZE] = 1;
     kfree(p);
+  }
+
 }
 
 // Free the page of physical memory pointed at by pa,
@@ -52,14 +66,23 @@ kfree(void *pa)
     panic("kfree");
 
   // Fill with junk to catch dangling refs.
+  acquire(&lock_counting.lock);
+  if(lock_counting.count[(uint64)pa / PGSIZE] <= 0)
+    panic("kfree refcount");
+  lock_counting.count[(uint64)pa / PGSIZE]--;
+  if(lock_counting.count[(uint64)pa / PGSIZE] > 0){
+    release(&lock_counting.lock);
+    return;
+  }
+  release(&lock_counting.lock);
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
-
   acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
   release(&kmem.lock);
+
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -76,7 +99,11 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
+    acquire(&lock_counting.lock);
+    lock_counting.count[(uint64)r / PGSIZE] = 1;
+    release(&lock_counting.lock);
+  }
   return (void*)r;
 }
