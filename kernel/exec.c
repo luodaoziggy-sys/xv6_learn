@@ -126,6 +126,12 @@ exec(char *path, char **argv)
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
+    for(i = 0; i < NVMA; i++){
+    struct vma *v = &p->vmas[i];
+    if(v->valid)
+      vma_unmap(p, oldpagetable, v->addr, v->length);
+  }
+  p->mmap_top = TRAPFRAME;
   proc_freepagetable(oldpagetable, oldsz);
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)

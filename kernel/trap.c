@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -16,6 +20,54 @@ void kernelvec();
 
 extern int devintr();
 
+
+static int
+mmap_pagefault(struct proc *p,uint64 addr, uint64 cause){
+    uint64 va = PGROUNDDOWN(addr);
+    struct vma *v=0;
+    for(int i=0;i<NVMA;i++){
+      struct vma *cur = &p->vmas[i];
+      if(cur->valid && addr>=cur->addr && 
+        addr-cur->addr<cur->length){
+          v = cur;
+          break;
+      }
+    }
+    if(v==0){ return -1;}
+    if(cause== 13 && !(v->prot & PROT_READ))
+    return -1;
+
+    if(cause == 15 && !(v->prot & PROT_WRITE))
+    return -1;
+
+    char *mem = kalloc();
+    if(mem==0){
+      return -1;
+    }
+    memset(mem,0,PGSIZE);
+    uint64 offset = v->offset + va - v->addr;
+
+    struct inode *ip = v->file->ip;
+    ilock(ip);
+    int n = readi(ip,0,(uint64)mem,offset,PGSIZE);
+    iunlock(ip);
+    if(n<0){
+      kfree(mem);
+      return -1;
+    }
+    int perm = PTE_U;
+    if(v->prot&PROT_READ){ 
+      perm|=PTE_R;
+    }
+    if(v->prot&PROT_WRITE){ 
+      perm|=PTE_R|PTE_W;
+    }
+    if(mappages(p->pagetable,va,PGSIZE,(uint64)mem,perm)<0){
+      kfree(mem);
+      return -1;
+    }
+    return 0;
+}
 void
 trapinit(void)
 {
@@ -67,7 +119,13 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } 
+  else if(r_scause()==13||r_scause()==15){
+    if(mmap_pagefault(p,r_stval(),r_scause())<0){
+       setkilled(p);
+    }
+  }
+  else {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
     setkilled(p);

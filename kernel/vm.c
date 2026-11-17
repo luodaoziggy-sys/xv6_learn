@@ -5,6 +5,12 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "proc.h"
+#include "file.h"
+#include "fcntl.h"
+
 
 /*
  * the kernel's page table.
@@ -448,4 +454,106 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int
+vma_unmap(struct proc *p, pagetable_t pagetable, uint64 addr, uint64 len){
+  struct vma *v=0;
+  int result = 0;
+  if(len <= 0 || addr % PGSIZE != 0)
+    return -1;
+  uint64 end = addr + (uint64)len;
+  if(end<addr){
+    return -1;
+  }
+  for(int i=0;i<NVMA;i++){
+    struct vma *cur = &p->vmas[i];
+    if(!cur->valid){
+      continue;
+    }
+    uint64 vend = cur->addr + cur->length;
+    if(addr>=cur->addr && end<=vend && end>addr){
+      v = cur;
+      break;
+    }
+
+  }
+  if(v==0){return -1;}
+
+  uint64 vend = v->addr + v->length;
+  if(addr != v->addr && end != vend ){
+    return -1;
+  }
+  if(addr == v->addr && end != vend &&
+    len % PGSIZE != 0)
+    return -1;
+  
+  if(v->flags==MAP_SHARED){
+    for(uint64 va = addr;va<PGROUNDUP(end);va+=PGSIZE){
+      pte_t *pte = walk(pagetable, (uint64)va, 0);
+      if(pte==0||(*pte & PTE_V)==0){
+        continue;
+      }
+
+      uint64 pa = PTE2PA(*pte);
+      uint64 off = v->offset + (va-v->addr);
+
+      uint64 n = end - va;
+      if(n>PGSIZE) n=PGSIZE;
+
+      for(uint64 written = 0; written < n; ){
+        uint64 chunk = n - written;
+        if(chunk>BSIZE) chunk = BSIZE;
+        begin_op();
+        ilock(v->file->ip);
+
+        uint64 fileoff = off + written;
+        if(fileoff >= v->file->ip->size){
+          iunlock(v->file->ip);
+          end_op();
+          break;
+        }
+        if(chunk > v->file->ip->size - fileoff)
+          chunk = v->file->ip->size - fileoff;
+
+        int r = writei(v->file->ip, 0,
+                        pa + written, fileoff, chunk);
+        iunlock(v->file->ip);
+        end_op();
+
+        if(r!=chunk){
+          result =  -1;
+          break;
+        } 
+          
+        
+        written += chunk; 
+      }
+      uvmunmap(pagetable, va, 1, 1);
+
+    }
+  }
+
+    for(uint64 va=addr;va<PGROUNDUP(end);va+=PGSIZE){
+      pte_t *pte = walk(pagetable, va, 0);
+      if(pte == 0||(*pte&PTE_V)==0)
+        continue;
+      uvmunmap(pagetable, va, 1, 1);
+    }
+
+    if(addr==v->addr && end == vend){
+      fileclose(v->file);
+      memset(v,0,sizeof(*v));
+      // p->mmap_top = vend;
+    }
+    else if(addr==v->addr){
+      v->addr = end;
+      v->length = vend - end;
+      v->offset += len;
+    }
+    else{
+      v->length = addr - v->addr;
+    }
+
+    return result;
 }

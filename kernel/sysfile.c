@@ -503,3 +503,74 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void){
+  uint64 addr;
+  int len,prot,flags,fd,off;
+  struct proc *p = myproc();
+  // // uint *a;
+  // // char path[MAXPATH];
+  struct file *f;
+  // struct inode *ip;
+
+  argaddr(0, &addr);
+  argint(1,&len);
+  argint(2,&prot);
+  argint(3,&flags);
+  argint(5,&off);
+  if(len<=0){ return -1;}
+  if(addr!=0||off!=0){return -1;}
+  if(argfd(4,&fd,&f)<0){return -1;}
+  if((prot & PROT_WRITE) &&
+   (flags & MAP_SHARED) &&
+   !f->writable)
+    return -1;
+  if((prot & PROT_READ) && !f->readable)
+    return -1;
+  if(flags != MAP_SHARED && flags != MAP_PRIVATE)
+    return -1;
+  if(prot == 0 || (prot & ~(PROT_READ | PROT_WRITE)))
+    return -1;
+  if(f->type != FD_INODE)
+    return -1;
+  uint64 size = PGROUNDUP(len);
+  if(size > p->mmap_top)
+    return -1;
+  uint64 start = p->mmap_top-size;
+  if(PGROUNDUP(p->sz)>=start){
+    return -1;
+  }
+  struct vma *v=0;
+  for(int i=0;i<NVMA;i++){
+    if(p->vmas[i].valid==0){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+  if(v==0){return -1;}
+  v->addr = start;
+  v->length = size;
+  v->prot = prot;
+  v->flags = flags;
+  v-> offset = off;
+  v->file = filedup(f);
+  v->valid = 1;
+  
+  p->mmap_top = start;
+
+  
+  return start;
+}
+
+uint64
+sys_munmap(void){
+  uint64 addr;
+  int len;
+  // struct proc *p = myproc();
+  // struct vma *v=0;
+  argaddr(0, &addr);
+  argint(1,&len);
+  struct proc *p = myproc();
+  return vma_unmap(p, p->pagetable, addr, len);
+}

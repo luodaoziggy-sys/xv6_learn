@@ -145,7 +145,8 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
-
+  p->mmap_top = TRAPFRAME;
+  memset(p->vmas, 0, sizeof(p->vmas));
   return p;
 }
 
@@ -169,6 +170,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->mmap_top = TRAPFRAME;
+  memset(p->vmas, 0, sizeof(p->vmas));
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -295,7 +298,14 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+  for(int i=0;i<NVMA;i++){
+    np->vmas[i]=p->vmas[i];
+    if(p->vmas[i].valid){
+    np->vmas[i].file = filedup(p->vmas[i].file);
+    }
 
+  }
+  np->mmap_top = p->mmap_top;
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -350,7 +360,13 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+  for(int i = 0; i < NVMA; i++){
+    struct vma *v = &p->vmas[i];
 
+    if(v->valid){
+      vma_unmap(p, p->pagetable, v->addr, v->length);
+    }
+  }
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
     if(p->ofile[fd]){
